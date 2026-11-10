@@ -1,7 +1,7 @@
 {
   "connectVersion": "0.1.0-beta.9",
   "files": {
-    "clawchat-core/SKILL.md": "e0784471020e8e132898648b420ac1a582c9192366618962b2f2f087f83aacf8",
+    "clawchat-core/SKILL.md": "2e892661abf0482cb6058cb594158d978b4cb83c826f5947782d4427bd66753f",
     "clawchat-core/agents/openai.yaml": "83cf32458e89607db5c51317fc1dcd5dbdb279a4f6d068a9eaa2e963490aeda7",
     "clawchat-core/references/tools.md": "e050f5d1f3c7a0b1799f6c3eca6f5b1f2c00842b96f093108206d493f27f383a",
     "clawchat-liveware/SKILL.md": "a2c56bd4d036cf809103622487fca825c9a1c3c79bec9e64653fba21ca7bfbf1",

@@ -7,6 +7,8 @@ export const CORE_CONTROL_HOST = "127.0.0.1" as const;
 export const CORE_CONTROL_PORT = 47_822 as const;
 export const CORE_CONTROL_ORIGIN = `http://${CORE_CONTROL_HOST}:${CORE_CONTROL_PORT}` as const;
 export const CORE_CONTROL_CONFIG_HEADER = "X-ClawChat-Connect-Core-Config-Path" as const;
+export const CORE_BINDING_RESUME_PATH = "/core/v1/bindings/resume" as const;
+export const CORE_BINDING_QUIESCE_PATH = "/core/v1/bindings/quiesce" as const;
 export const CORE_BINDING_RETIRE_PATH = "/core/v1/bindings/retire" as const;
 const CORE_PLUGIN_PATH = "/core/v1/plugins" as const;
 const CORE_STATUS_PATH = "/core/v1/status" as const;
@@ -37,6 +39,12 @@ export async function startCoreControl(
   serverFactory: (options: CoreControlServerFactoryOptions) => CoreControlServerHandle = (options) =>
     Bun.serve(options),
   retireRuntimeBindings: (bindingIds: readonly string[]) => Promise<void> = async () => undefined,
+  quiesceRuntimeBindings: (bindingIds: readonly string[]) => Promise<void> = async () => {
+    throw new Error("Runtime quiescence is unavailable");
+  },
+  resumeRuntimeBindings: () => Promise<void> = async () => {
+    throw new Error("Runtime resumption is unavailable");
+  },
 ): Promise<CoreControlHandle> {
   const clientLeases = new Map<string, ManagedWebAppLease>();
   const retireClientLeases = async (reference: ManagedWebAppGenerationReference): Promise<void> => {
@@ -77,6 +85,8 @@ export async function startCoreControl(
           (url.pathname !== CORE_STATUS_PATH &&
             url.pathname !== CORE_CLIENT_PATH &&
             url.pathname !== CORE_BINDING_RETIRE_PATH &&
+            url.pathname !== CORE_BINDING_QUIESCE_PATH &&
+            url.pathname !== CORE_BINDING_RESUME_PATH &&
             !url.pathname.startsWith(CORE_PLUGIN_PATH))
         ) {
           return jsonError(404, "Core control endpoint was not found");
@@ -110,6 +120,22 @@ export async function startCoreControl(
             clientLeases.set(body.bindingId, lease);
           }
           return json({ origin: lease.upstream });
+        }
+        if (url.pathname === CORE_BINDING_RESUME_PATH && request.method === "POST") {
+          await resumeRuntimeBindings();
+          return json({ resumed: true });
+        }
+        if (url.pathname === CORE_BINDING_QUIESCE_PATH && request.method === "POST") {
+          const body = await readJson<{ bindingIds?: unknown }>(request);
+          if (
+            !Array.isArray(body.bindingIds) ||
+            body.bindingIds.length === 0 ||
+            body.bindingIds.some((id) => typeof id !== "string" || !id.trim())
+          )
+            return jsonError(400, "Quiescence requires exact Agent Binding identities");
+          const bindingIds = [...new Set(body.bindingIds as string[])].sort();
+          await quiesceRuntimeBindings(bindingIds);
+          return json({ quiescedBindingIds: bindingIds });
         }
         if (url.pathname === CORE_BINDING_RETIRE_PATH && request.method === "POST") {
           const body = await readJson<{ bindingIds?: unknown }>(request);

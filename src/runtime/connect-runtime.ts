@@ -66,6 +66,7 @@ export interface ConnectRuntimeOptions {
 }
 
 export class ConnectRuntime {
+  private readonly typingTurns = new Map<string, number>();
   private readonly runtimeAdapters: RuntimeAdapterRegistry;
   private readonly workspaces: WorkspaceCatalog;
   private readonly sessionContinuity: SessionContinuity;
@@ -759,9 +760,26 @@ export class ConnectRuntime {
     const key = sessionKey(current.chatId, current.sessionId);
     this.activeTurnSessionChats.set(key, current.chatId);
     await this.recordRuntimeStatus(this.queue.stats());
+    // Typing is transient: a disconnect must not fail or cancel the actual turn.
+    const sendTyping = (active: boolean) => {
+      try {
+        this.options.wsClient.sendTyping?.(message.chatId, active, { toType: message.chatType });
+      } catch {}
+    };
+    this.typingTurns.set(message.chatId, (this.typingTurns.get(message.chatId) ?? 0) + 1);
+    sendTyping(true);
+    const typingHeartbeat = setInterval(() => sendTyping(true), 5_000);
+    typingHeartbeat.unref();
     try {
       await this.runTurn(message, current, onTurnAccepted);
     } finally {
+      clearInterval(typingHeartbeat);
+      const remaining = (this.typingTurns.get(message.chatId) ?? 1) - 1;
+      if (remaining > 0) this.typingTurns.set(message.chatId, remaining);
+      else {
+        this.typingTurns.delete(message.chatId);
+        sendTyping(false);
+      }
       this.activeTurnSessionChats.delete(key);
       await this.recordRuntimeStatus(this.queue.stats());
     }

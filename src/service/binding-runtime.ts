@@ -228,7 +228,7 @@ export async function startBindingRuntime(options: BindingRuntimeOptions): Promi
     sendClawChatMessage: async (delivery) => {
       const payload = buildTextMessagePayload(
         "",
-        delivery.sourceMessageId
+        delivery.chatType === "group" && delivery.sourceMessageId
           ? {
               replyToMessageId: delivery.sourceMessageId,
               replyPreview:

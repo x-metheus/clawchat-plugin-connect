@@ -32,6 +32,48 @@ declare module "cordis" {
   }
 }
 
+/** Hold admission while an upgrade is prepared, with an explicit failure recovery path. */
+export function createUpgradeQuiescence(queues: Pick<SessionQueueModule, "quiesceBindings">) {
+  let operation: Promise<void> | undefined;
+  let acquired: Promise<void> | undefined;
+  let release: (() => void) | undefined;
+  return {
+    async suspend(bindingIds: readonly string[]): Promise<void> {
+      if (!operation) {
+        let ready!: () => void;
+        let failed!: (error: unknown) => void;
+        acquired = new Promise<void>((resolve, reject) => {
+          ready = resolve;
+          failed = reject;
+        });
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        operation = queues.quiesceBindings(
+          bindingIds,
+          async () => undefined,
+          async () => {
+            ready();
+            await released;
+          },
+        );
+        void operation.catch(failed);
+      }
+      await acquired;
+    },
+    async resume(): Promise<void> {
+      release?.();
+      try {
+        await operation;
+      } finally {
+        operation = undefined;
+        acquired = undefined;
+        release = undefined;
+      }
+    },
+  };
+}
+
 export async function mountMandatoryExecutionModules(
   root: Context,
   config: ConnectConfig,

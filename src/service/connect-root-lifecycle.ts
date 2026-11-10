@@ -5,7 +5,7 @@ import type { RuntimeAdapterRegistry } from "../runtime/registry";
 import type { ConnectConfig } from "../types";
 import { createBindingRuntimeLifecycle } from "./binding-runtime-lifecycle";
 import { mountMandatoryDurableModules } from "./connect-durable-modules";
-import { mountMandatoryExecutionModules } from "./connect-execution-modules";
+import { createUpgradeQuiescence, mountMandatoryExecutionModules } from "./connect-execution-modules";
 import {
   type ConnectSurfaceDependencies,
   type ConnectSurfaceOptions,
@@ -37,6 +37,8 @@ export async function runConnectRootLifecycle(options: ConnectRootLifecycleOptio
   let disposeSurfaces: (() => Promise<void>) | undefined;
   let pluginHost: ConnectPluginHost | undefined;
   let coreControl: CoreControlHandle | undefined;
+  const preservePublicationsOnShutdown = process.env.CLAWCHAT_PRESERVE_PUBLICATIONS_ON_SHUTDOWN === "1";
+  let upgradePrepared = false;
 
   try {
     await mountMandatoryDurableModules(root, options.persistence, options.reportDisposalFailure);
@@ -65,22 +67,37 @@ export async function runConnectRootLifecycle(options: ConnectRootLifecycleOptio
       bindingRuntimeLifecycle,
     );
     disposeSurfaces = surfaces.dispose;
+    const upgrade = createUpgradeQuiescence(root.connectSessionQueue);
     coreControl = await startCoreControl(
       options.configPath,
       pluginHost,
       undefined,
       bindingRuntimeLifecycle.retireBindings,
+      async (bindingIds) => {
+        const expected = Object.keys(options.config.agents).sort();
+        if (JSON.stringify([...bindingIds].sort()) !== JSON.stringify(expected))
+          throw new Error("Upgrade must quiesce every configured binding");
+        await upgrade.suspend(bindingIds);
+        pluginHost?.preserveOnShutdown(true);
+        upgradePrepared = true;
+      },
+      async () => {
+        await upgrade.resume();
+        pluginHost?.preserveOnShutdown(false);
+        upgradePrepared = false;
+      },
     );
     await options.waitUntilShutdown();
     return surfaces.result;
   } finally {
+    if (preservePublicationsOnShutdown) pluginHost?.preserveOnShutdown(true);
     try {
       await coreControl?.stop();
     } catch (error) {
       options.reportDisposalFailure(error);
     }
     try {
-      await pluginHost?.retireManagedResources();
+      if (!upgradePrepared && !preservePublicationsOnShutdown) await pluginHost?.retireManagedResources();
     } catch (error) {
       options.reportDisposalFailure(error);
     }
@@ -90,7 +107,8 @@ export async function runConnectRootLifecycle(options: ConnectRootLifecycleOptio
       options.reportDisposalFailure(error);
     }
     try {
-      await pluginHost?.retireBindings(Object.keys(options.config.agents));
+      if (!upgradePrepared && !preservePublicationsOnShutdown)
+        await pluginHost?.retireBindings(Object.keys(options.config.agents));
     } catch (error) {
       options.reportDisposalFailure(error);
     }

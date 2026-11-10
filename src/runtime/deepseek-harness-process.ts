@@ -124,13 +124,14 @@ export async function startDshBridge(options: StartDshBridgeOptions): Promise<Ds
           CONNECT_DSH_BRIDGE_FD_OUT: "3",
           CONNECT_DSH_BRIDGE_FD_IN: "4",
         },
-        stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+        // SDK profiles shut down on stdin EOF; keep their host transport alive.
+        stdio: ["pipe", "ignore", "pipe", "pipe", "pipe"],
         windowsHide: true,
       },
     );
     return await SpawnedDshBridge.create(child, temporaryDirectory, options);
   } catch (error) {
-    child?.kill("SIGTERM");
+    if (child) await terminateDshProcess(child, options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
     await rm(temporaryDirectory, { recursive: true, force: true });
     throw error;
   }
@@ -326,19 +327,16 @@ class SpawnedDshBridge implements DshBridgeClient {
       if (this.child.exitCode === null && !this.failure) {
         await this.request("shutdown", {}, this.stopTimeoutMs).catch(() => undefined);
         this.output.end();
+        this.child.stdin?.end();
       }
-      if (this.child.exitCode === null) {
-        await Promise.race([
-          this.exited,
-          new Promise<void>((resolve) =>
-            setTimeout(() => {
-              this.child.kill("SIGTERM");
-              resolve();
-            }, this.stopTimeoutMs),
-          ),
-        ]);
+      if (this.child.exitCode === null && this.child.signalCode === null) {
+        try {
+          await withTimeout(this.exited, this.stopTimeoutMs, "DSH shutdown timed out");
+        } catch {
+          await terminateDshProcess(this.child, this.stopTimeoutMs);
+        }
       }
-      await this.exited;
+      await withTimeout(this.exited, this.stopTimeoutMs, "DSH process did not close");
     } finally {
       this.fail(new Error("DeepSeek Harness Bridge closed"));
       await rm(this.temporaryDirectory, { recursive: true, force: true });
@@ -375,6 +373,21 @@ class SpawnedDshBridge implements DshBridgeClient {
     }
     this.pending.clear();
   }
+}
+
+async function terminateDshProcess(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.kill("SIGTERM");
+    try {
+      await withTimeout(exited, timeoutMs, "DSH termination timed out");
+    } catch {
+      child.kill("SIGKILL");
+      await withTimeout(exited, timeoutMs, "DSH process could not be reaped");
+    }
+  }
+  // No protocol reader may keep a failed launch alive after its process exits.
+  for (const stream of child.stdio) stream?.destroy();
 }
 
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {

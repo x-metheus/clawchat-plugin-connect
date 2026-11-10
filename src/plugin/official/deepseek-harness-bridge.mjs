@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { registerClawChatApprovalPolicy } from "./deepseek-harness-tool-policy.mjs";
 import { registerQuestionProviderWhenProfileReady } from "./deepseek-harness-question-provider.mjs";
 
 const PROTOCOL_NAME = "clawchat-connect-dsh-bridge";
@@ -86,7 +87,10 @@ export async function apply(ctx, config = {}) {
     return await response;
   };
 
-  const offApproval = ctx.on("approval/request", async (request, next) => {
+  const approvalPolicy = registerClawChatApprovalPolicy(ctx, {
+    owns: agent => Boolean(ownedSessionId(agent)),
+    configPath: process.env.CLAWCHAT_CONNECT_CONFIG,
+    ask: async (request, next) => {
     const sessionId = ownedSessionId(request.agent);
     if (!sessionId) return await next();
     const nativeDecision = await next();
@@ -113,9 +117,11 @@ export async function apply(ctx, config = {}) {
     } catch {
       return request.signal?.aborted ? "cancelled" : "unavailable";
     }
+    },
   });
 
   const questionRegistration = registerQuestionProviderWhenProfileReady(ctx, {
+    owns(request) { return Boolean(ownedSessionId(request.agent)); },
     async ask(request) {
       const sessionId = ownedSessionId(request.agent);
       if (!sessionId) throw bridgeError("interaction-unavailable", "DSH question has no Connect-owned Agent");
@@ -164,6 +170,7 @@ export async function apply(ctx, config = {}) {
 
   const offEvents = ctx.on("session/event", (session, event) => {
     if (!handles.has(String(session.id))) return;
+    approvalPolicy.observe(handles.get(String(session.id)).agent, event);
     void send({ type: "event", sessionId: String(session.id), event }).catch(() => {
       process.kill(process.pid, "SIGTERM");
     });
@@ -199,8 +206,8 @@ export async function apply(ctx, config = {}) {
 
     let modelSelection;
     let disposeModelSelection = () => {};
-    const setup = async (agentCtx) => {
-      const agent = agentCtx.agent;
+    const setup = async (agentCtx, nativeAgent) => {
+      const agent = nativeAgent ?? agentCtx.agent;
       if (!agent) throw bridgeError("composition-failed", "DSH Agent setup has no scoped Agent");
       const logged = optionalObject(agent.session.requestHeader?.()?.config);
       const current =
@@ -212,8 +219,12 @@ export async function apply(ctx, config = {}) {
               ...(typeof logged.reasoningEffort === "string" ? { reasoningEffort: logged.reasoningEffort } : {}),
             }
           : agentDefaultModel?.currentSelection?.());
-      modelSelection = { current, assembled: undefined };
-      disposeModelSelection = installModelSelection(agentCtx, modelSelection);
+      modelSelection = agent.model && typeof agent.model.current==="function"
+        ? {get current(){return agent.model.current();}}
+        : {current,assembled:undefined};
+      const dispose=agent.model?installModelSelection(agentCtx):installModelSelection(agentCtx,modelSelection);
+      disposeModelSelection=typeof dispose==="function"?dispose:()=>{};
+      if(agent.model && typeof agent.model.select==="function" && current)agent.model.select(current);
       try {
         if (agentPresets) await agentPresets.mount(agentCtx, resolvedPreset);
       } catch (error) {
@@ -337,10 +348,10 @@ export async function apply(ctx, config = {}) {
       const sessionId = requestString(params, "sessionId");
       const existing = handles.get(sessionId);
       if (existing) return { sessionId, header: existing.agent.session.header };
-      const inspection = await ctx.sessionPersistence.inspect(sessionId);
+      const inspection = await inspectPersistedSession(ctx.sessionPersistence,sessionId);
       const requestedPreset = resolveSessionPreset
-        ? resolveSessionPreset({ header: inspection.meta, events: inspection.events })
-        : optionalString(inspection.meta?.agentPreset);
+        ? resolveSessionPreset({header:inspection.meta,events:inspection.events})
+        : optionalString([...inspection.events].reverse().find(event=>event.type==="agent-preset/selected")?.data?.agentPreset) ?? optionalString(inspection.meta?.agentPreset);
       const handle = await createOwnedAgent({
         sessionId,
         selection: undefined,
@@ -408,7 +419,10 @@ export async function apply(ctx, config = {}) {
           { type: "text", text },
           ...imageRefs.map((attachment) => ({ type: "image", attachment })),
         ],
-        source: { kind: "user", connectInputId: inputId },
+        source: { kind: "user", connectInputId: inputId,
+          ...(['client','clawchat'].includes(params.inputOrigin) ? {connectInputOrigin:params.inputOrigin} : {}),
+          ...(optionalString(params.clawchatTurnContext) ? {clawchatTurnContext:params.clawchatTurnContext} : {}),
+        },
       });
       if (params.mode === "steer") handle.agent.steer(message);
       else handle.agent.followup(message);
@@ -421,7 +435,7 @@ export async function apply(ctx, config = {}) {
       handle.agent.cancel({ kind: "user" }, { keepInbox: true });
       await handle.agent.whenIdle();
       await ctx.sessions.flush(handle.agent.session);
-      const terminal = [...handle.agent.session.events]
+      const terminal = sessionEvents(handle.agent.session)
         .reverse()
         .find((event) => event.type === "turn/end");
       return { reason: terminal?.data?.reason?.kind ?? null, idle: handle.agent.status === "idle" };
@@ -496,7 +510,9 @@ export async function apply(ctx, config = {}) {
           );
         }
       }
-      handle.modelSelection.current = selection;
+      if(handle.agent.model && typeof handle.agent.model.select==="function")handle.agent.model.select(selection);
+      else handle.modelSelection.current=selection;
+      await ctx.sessions.flush(handle.agent.session);
       return { ...selection };
     },
 
@@ -575,10 +591,11 @@ export async function apply(ctx, config = {}) {
       const headers = await ctx.sessionPersistence.list();
       const archived = new Set(workspaceRegistry?.archivedSessionIds.map(String) ?? []);
       return await Promise.all(
-        headers.map(async (header) => {
+        headers.map(async (snapshot) => {
+          const header=snapshot.header??snapshot;
           let events = [];
           try {
-            events = [...(await ctx.sessionPersistence.inspect(header.id)).events];
+            events = [...(await inspectPersistedSession(ctx.sessionPersistence,header.id)).events];
           } catch {
             // The header remains visible. History reads report the concrete corruption separately.
           }
@@ -600,9 +617,9 @@ export async function apply(ctx, config = {}) {
       const sessionId = requestString(params, "sessionId");
       const handle = handles.get(sessionId);
       if (handle) {
-        return { header: handle.agent.session.header, events: [...handle.agent.session.events] };
+        return { header: handle.agent.session.header, events: sessionEvents(handle.agent.session) };
       }
-      const inspection = await ctx.sessionPersistence.inspect(sessionId);
+      const inspection = await inspectPersistedSession(ctx.sessionPersistence,sessionId);
       return { header: inspection.meta, events: [...inspection.events] };
     },
 
@@ -732,7 +749,7 @@ export async function apply(ctx, config = {}) {
     if (disposed) return;
     disposed = true;
     offEvents();
-    offApproval();
+    approvalPolicy.dispose();
     await questionRegistration.dispose();
     await hello.catch(() => undefined);
     const interactionError = bridgeError("interaction-cancelled", "DSH Bridge disposed");
@@ -747,6 +764,18 @@ export async function apply(ctx, config = {}) {
     await writeTail.catch(() => undefined);
     await new Promise((resolve) => outputStream.end(resolve));
   };
+}
+function sessionEvents(session){
+  if(typeof session.eventAt!=="function")return [...session.events];
+  const events=[];
+  for(let seq=0;seq<=session.seq;seq++){const event=session.eventAt(seq);if(event!==undefined)events.push(event);}
+  return events;
+}
+async function inspectPersistedSession(persistence,sessionId){
+  if(typeof persistence.inspect==="function")return await persistence.inspect(sessionId);
+  const handle=await persistence.open(sessionId,"read");
+  try {const result=await handle.read(0);return {meta:handle.header,events:result.events};}
+  finally {await handle.close();}
 }
 async function optionalDshImport(name) {
   try {

@@ -33,7 +33,9 @@ export function createClawChatApiClient(options: {
   deviceId: string;
   token?: string | null;
   fetchImpl?: FetchLike;
-}): ClawChatApiClient {
+}): ClawChatApiClient & {
+  getAgentOwnerProfile(): Promise<{ id: string | null; nickname: string | null; locale: string | null }>;
+} {
   const baseUrl = normalizeBaseUrl(options.baseUrl, "baseUrl");
   const deviceId = options.deviceId.trim();
   if (!deviceId) throw new ClawChatApiError("validation", "deviceId is required");
@@ -114,6 +116,14 @@ export function createClawChatApiClient(options: {
       };
       if (params.existingUserId?.trim()) body.user_id = params.existingUserId.trim();
       return await call<AgentConnectResult>("POST", "/v1/agents/connect", json(body));
+    },
+    async getAgentOwnerProfile() {
+      const profile = await call<Record<string, unknown>>("GET", "/v1/agents/me/owner");
+      return {
+        id: optionalTrimmedString(profile.id),
+        nickname: optionalTrimmedString(profile.nickname),
+        locale: optionalTrimmedString(profile.locale),
+      };
     },
     async getUserProfile(userId) {
       const profile = await call<Record<string, unknown>>(

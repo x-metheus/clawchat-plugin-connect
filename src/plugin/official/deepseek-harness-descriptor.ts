@@ -71,6 +71,12 @@ const descriptor: OfficialPluginDescriptor = {
   assets: [
     { entry: "artifacts/deepseek-harness-bridge.mjs", sources: bridgeSources },
     { entry: "artifacts/deepseek-harness-question-provider.mjs", sources: questionProviderSources },
+    {
+      entry: "artifacts/deepseek-harness-tool-policy.mjs",
+      sources: Object.fromEntries(
+        Object.keys(bridgeSources).map((target) => [target, "src/plugin/official/deepseek-harness-tool-policy.mjs"]),
+      ),
+    },
   ],
   entrypoint: "src/plugin/official/deepseek-harness-entry.ts",
 };

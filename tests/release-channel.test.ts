@@ -442,21 +442,13 @@ test("the unversioned shell installer follows beta while Windows requires an exp
   expect(powershell).toContain("Pass -Version only to install an explicitly selected historical Windows release");
 });
 
-test("shell installer bypasses the beta channel for an explicit historical version", async () => {
-  const installer = await read("install.sh");
-  expect(installer).toContain('version="$' + "{1:-$" + '{CLAWCHAT_CONNECT_VERSION:-}}"');
-  expect(installer).toContain('if [ -z "$version" ]; then');
-  expect(installer).toContain('base_url="https://github.com/$' + "{repository}/releases/download/$" + '{version}"');
-  if (globalThis.process.platform === "win32") return;
-
+async function runShellInstallerFixture(kernel: string, machine: string, translated = "0") {
   const directory = await mkdtemp(join(tmpdir(), "clawchat-connect-explicit-shell-"));
   const commandDirectory = join(directory, "commands");
   const requestsPath = join(directory, "requests.log");
   await mkdir(commandDirectory);
-  const curlPath = join(commandDirectory, "curl");
-  await writeFile(
-    curlPath,
-    [
+  const commands = {
+    curl: [
       "#!/bin/sh",
       "url=",
       'for argument in "$@"; do',
@@ -466,24 +458,66 @@ test("shell installer bypasses the beta channel for an explicit historical versi
       "exit 17",
       "",
     ].join("\n"),
-  );
-  await chmod(curlPath, 0o755);
-
-  const process = Bun.spawn(["sh", "install.sh", "v0.1.0-alpha.33"], {
+    uname:
+      '#!/bin/sh\ncase "$1" in -s) printf "%s\\n" "$CONNECT_INSTALL_KERNEL" ;; -m) printf "%s\\n" "$CONNECT_INSTALL_MACHINE" ;; *) exit 2 ;; esac\n',
+    sysctl: '#!/bin/sh\nprintf "%s\\n" "$CONNECT_INSTALL_TRANSLATED"\n',
+  };
+  for (const [name, source] of Object.entries(commands)) {
+    const path = join(commandDirectory, name);
+    await writeFile(path, source);
+    await chmod(path, 0o755);
+  }
+  const child = Bun.spawn(["sh", "install.sh", "v0.1.0-alpha.33"], {
     cwd: globalThis.process.cwd(),
     env: {
       ...globalThis.process.env,
       PATH: `${commandDirectory}${delimiter}${globalThis.process.env.PATH ?? ""}`,
+      TMPDIR: directory,
+      CLAWCHAT_CONNECT_REPOSITORY: "fixture-owner/fixture-repository",
       CLAWCHAT_CONNECT_INSTALL_DIR: join(directory, "install"),
       CONNECT_INSTALL_REQUESTS: requestsPath,
+      CONNECT_INSTALL_KERNEL: kernel,
+      CONNECT_INSTALL_MACHINE: machine,
+      CONNECT_INSTALL_TRANSLATED: translated,
     },
     stdout: "pipe",
     stderr: "pipe",
   });
-  expect(await process.exited).not.toBe(0);
-  const requests = await read(requestsPath);
-  expect(requests).toContain("/releases/download/v0.1.0-alpha.33/clawchat-connect-");
-  expect(requests).not.toContain("release-channel/latest-beta.txt");
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  const requests = (await Bun.file(requestsPath).exists()) ? (await read(requestsPath)).trim().split("\n") : [];
+  return { exitCode, stderr, requests };
+}
+
+test.each([
+  ["arm64", "0"],
+  ["x86_64", "1"],
+])(
+  "shell installer bypasses the beta channel for an explicit historical version on Darwin %s (translated=%s)",
+  async (machine, translated) => {
+    const installer = await read("install.sh");
+    expect(installer).toContain('version="$' + "{1:-$" + '{CLAWCHAT_CONNECT_VERSION:-}}"');
+    expect(installer).toContain('if [ -z "$version" ]; then');
+    expect(installer).toContain('base_url="https://github.com/$' + "{repository}/releases/download/$" + '{version}"');
+    if (globalThis.process.platform === "win32") return;
+
+    const result = await runShellInstallerFixture("Darwin", machine, translated);
+    expect(result.exitCode).toBe(17);
+    expect(result.requests).toEqual([
+      "https://github.com/fixture-owner/fixture-repository/releases/download/v0.1.0-alpha.33/clawchat-connect-darwin-arm64.tar.gz",
+    ]);
+    expect(result.stderr).not.toContain("current beta releases support only");
+  },
+);
+
+test.each([
+  ["Linux", "x86_64"],
+  ["Darwin", "x86_64"],
+])("shell installer rejects unsupported %s %s before downloading an archive", async (kernel, machine) => {
+  if (globalThis.process.platform === "win32") return;
+  const result = await runShellInstallerFixture(kernel, machine);
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("current beta releases support only macOS on Apple silicon");
+  expect(result.requests).toEqual([]);
 });
 
 test("PowerShell installer bypasses the beta channel for an explicit historical version", async () => {

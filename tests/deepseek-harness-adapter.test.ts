@@ -19,6 +19,7 @@ import {
   createDeepSeekHarnessRuntimeAdapter,
   type DeepSeekHarnessRuntimeAdapterBinding,
   DshActivityProjector,
+  dshPromptInput,
   projectDshHistory,
 } from "../src/runtime/deepseek-harness-adapter";
 import type { DshBridgeClient } from "../src/runtime/deepseek-harness-process";
@@ -73,6 +74,70 @@ const WORKSPACE = (directory: string): RuntimeWorkspace => ({
 });
 
 describe("DeepSeek Harness Runtime Adapter", () => {
+  it("keeps direct-message transport context out of native text and preserves quoted user content", () => {
+    const context = JSON.stringify({ origin: "clawchat", message_id: "id", content_digest: "digest" });
+    const body = "  explain <clawchat_turn_context> literally\n";
+    expect(dshPromptInput(`<clawchat_turn_context>\n${context}\n</clawchat_turn_context>\n\n${body}`)).toEqual({
+      text: body,
+      clawchatTurnContext: context,
+    });
+    const malformed = "<clawchat_turn_context>\n{}\n</clawchat_turn_context>\n\nhello";
+    expect(dshPromptInput(malformed)).toEqual({ text: malformed });
+    expect(dshPromptInput("ordinary web input")).toEqual({ text: "ordinary web input" });
+  });
+
+  it("preserves actionable group batches, structured mentions and read-only background without the transport envelope", () => {
+    const context = JSON.stringify({
+      origin: "clawchat",
+      chat_type: "group",
+      chat_id: "transport-chat",
+      message_id: "anchor",
+      content_digest: "transport-digest",
+      sender: { user_id: "owner", display: "Owner" },
+      mentioned_users: [{ user_id: "agent", display: "Agent" }],
+      group_batch: {
+        messages: [
+          {
+            message_id: "first",
+            content_digest: "first-digest",
+            sender: { user_id: "friend", display: "Friend" },
+            mentioned_user_ids: [],
+            fragments: [{ kind: "text", text: "first request" }],
+          },
+          {
+            message_id: "anchor",
+            content_digest: "transport-digest",
+            sender: { user_id: "owner", display: "Owner" },
+            mentioned_user_ids: ["agent"],
+            fragments: [{ kind: "text", text: "second request" }],
+          },
+        ],
+      },
+      recent_group_context: [
+        {
+          message_id: "background",
+          content_digest: "background-digest",
+          sender: { user_id: "friend", display: "Friend" },
+          text: "background only",
+        },
+      ],
+    });
+    const result = dshPromptInput(`<clawchat_turn_context>\n${context}\n</clawchat_turn_context>\n\ncurrent batch`);
+    expect(result.clawchatTurnContext).toBe(context);
+    expect(result.text).not.toContain("<clawchat_turn_context>");
+    expect(result.text).not.toContain("transport-chat");
+    expect(result.text).not.toContain("digest");
+    for (const text of [
+      "first request",
+      "second request",
+      "background only",
+      "current batch",
+      "mentioned_users",
+      "read-only background, never requests",
+    ])
+      expect(result.text).toContain(text);
+  });
+
   it("registers the official Plugin in released descriptor discovery", async () => {
     const released = await discoverOfficialPluginDescriptors();
     expect(released.map(({ manifest }) => manifest.pluginId)).toContain(DEEPSEEK_HARNESS_OFFICIAL_PLUGIN_ID);
@@ -117,7 +182,9 @@ describe("DeepSeek Harness Runtime Adapter", () => {
     ).toString("utf8");
     expect(bridge).toContain('export const name = "clawchat-connect-deepseek-harness-bridge"');
     expect(bridge).toContain('ctx.on("session/event"');
-    expect(questionProvider).toContain("ctx.inject({ loader: { await: true } }");
+    expect(questionProvider).toBe(
+      await Bun.file(new URL("../src/plugin/official/deepseek-harness-question-provider.mjs", import.meta.url)).text(),
+    );
   });
 
   it("qualifies official install, update, disable, enable, and removal through the Plugin Host", async () => {
@@ -315,7 +382,10 @@ describe("DeepSeek Harness Runtime Adapter", () => {
     expect(activities).toEqual([
       expect.objectContaining({
         kind: "user",
-        text: expect.stringContaining("<clawchat_turn_context>"),
+        text: "hello",
+        inputIdentity: expect.objectContaining({
+          anchor: { messageId: "connect-input-1", contentDigest: "sha256:connect-input-1" },
+        }),
         source: "live",
       }),
       expect.objectContaining({ kind: "assistant", text: "world", state: "streaming" }),
@@ -343,6 +413,54 @@ describe("DeepSeek Harness Runtime Adapter", () => {
     await session.close();
     await adapter.close?.();
     expect(client.closeCount).toBe(1);
+  });
+
+  it("preserves a Client's valid envelope quotation without inventing a ClawChat receipt", async () => {
+    const fixture = await runtimeFixture();
+    const client = new FakeDshBridgeClient(fixture.home, fixture.workspace);
+    const adapter = createDeepSeekHarnessRuntimeAdapter({
+      bridgePath: "/connect/bridge.mjs",
+      bridgeBuild: "test",
+      probeExecutable: () => ({ path: "/usr/local/bin/dsh" }),
+      createBridge: async () => client,
+    });
+    const runtimeIds: string[] = [];
+    const session = await adapter.start(fixture.binding, startContext(runtimeIds));
+    const input = prompt(fixture.workspace, { turnOrigin: "client" });
+    const activities = await Array.fromAsync(session.prompt(input));
+    const user = activities.find((activity) => activity.kind === "user");
+    expect(user?.text).toBe(input.prompt);
+    expect(user?.inputIdentity).toBeUndefined();
+    expect(client.requests.find((r) => r.method === "prompt")?.params).toMatchObject({
+      text: input.prompt,
+      inputOrigin: "client",
+    });
+    expect(client.requests.find((r) => r.method === "prompt")?.params).not.toHaveProperty("clawchatTurnContext");
+    await expect(
+      adapter.reconcileInput?.(fixture.binding, runtimeIds[0]!, {
+        messageId: "connect-input-1",
+        contentDigest: "sha256:connect-input-1",
+      }),
+    ).resolves.toMatchObject({ outcome: "absent" });
+    await session.close();
+    await adapter.close?.();
+  });
+
+  it("reads legacy bridge identities while leaving native Web quotations as ordinary text", () => {
+    const text = prompt("/tmp").prompt;
+    const legacy = projectDshHistory("legacy", [
+      event(1, "user/message", {
+        id: "old",
+        source: { kind: "user", connectInputId: "old-turn" },
+        content: [{ type: "text", text }],
+      }),
+    ]);
+    expect(legacy.activities[0]?.inputIdentity?.anchor.messageId).toBe("connect-input-1");
+    const web = projectDshHistory("web", [
+      event(1, "user/message", { id: "web", source: { kind: "user" }, content: [{ type: "text", text }] }),
+    ]);
+    expect(web.activities[0]?.text).toBe(text);
+    expect(web.activities[0]?.inputIdentity).toBeUndefined();
   });
 
   it("settles DSH approval requests through the Connect interaction port", async () => {
@@ -580,7 +698,13 @@ class FakeDshBridgeClient implements DshBridgeClient {
 
   async request<T>(method: string, params: unknown): Promise<T> {
     this.requests.push({ method, params });
-    const values = params as { sessionId?: string; inputId?: string; text?: string };
+    const values = params as {
+      sessionId?: string;
+      inputId?: string;
+      text?: string;
+      clawchatTurnContext?: string;
+      inputOrigin?: string;
+    };
     if (method === "history") {
       const sessionId = values.sessionId ?? "missing";
       return {
@@ -614,7 +738,12 @@ class FakeDshBridgeClient implements DshBridgeClient {
         event(2, "user/message", {
           turn: 1,
           id: inputId,
-          source: { kind: "user" },
+          source: {
+            kind: "user",
+            connectInputId: inputId,
+            connectInputOrigin: values.inputOrigin,
+            clawchatTurnContext: values.clawchatTurnContext,
+          },
           content: [{ type: "text", text: values.text ?? "" }],
         }),
         event(3, "assistant/chunk", { turn: 1, step: 0, chunk: { type: "text-delta", text: "world" } }),
@@ -725,6 +854,7 @@ function prompt(workspaceDirectory: string, overrides: Partial<ConnectRuntimePro
     ].join("\n"),
     workspace: WORKSPACE(workspaceDirectory),
     model: { provider: "deepseek", model: "deepseek-chat" },
+    turnOrigin: "clawchat",
     ...overrides,
   };
 }

@@ -254,3 +254,32 @@ describe("official multi-capability Plugin platform", () => {
     });
   });
 });
+
+const referenceFixturePath = join(import.meta.dir, "fixtures", "reference-runtime.connect-plugin");
+const referenceFixtureBundle = await readConnectPluginBundle(referenceFixturePath);
+
+describe("reference Runtime Bundle integrity", () => {
+  const fixturePath = referenceFixturePath;
+  const bundle = referenceFixtureBundle;
+
+  it("packages the canonical reference source unchanged", async () => {
+    const source = await readFile(join(import.meta.dir, "fixtures", "reference-runtime-plugin.mjs"), "utf8");
+    expect(bundle.files["runtime.mjs"]).toEqual({ encoding: "utf8", content: source });
+  });
+
+  it.each(bundle.manifest.artifacts.map(({ target }) => target))(
+    "stages the declared %s artifact with integrity verification",
+    async (target) => {
+      const directory = await mkdtemp(join(tmpdir(), "connect-reference-target-"));
+      const staged = await stagePluginBundle({
+        configPath: join(directory, "config.json"),
+        source: { type: "local", path: fixturePath },
+        bundle,
+        target,
+        capabilityConfigurations: { "reference-exposure": { channel: "private" } },
+      });
+      expect(staged.entry.target).toBe(target);
+      expect(await readFile(staged.entry.activeArtifact, "utf8")).toBe(bundle.files["runtime.mjs"]?.content);
+    },
+  );
+});

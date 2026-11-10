@@ -10,6 +10,7 @@ import livewareDescriptor from "../src/plugin/official/liveware-descriptor";
 import {
   createOfficialLivewarePluginEntry,
   type OfficialLivewareExposureServices,
+  type OfficialLivewareManagedDisposer,
 } from "../src/plugin/official/liveware-entry";
 import { OFFICIAL_LIVEWARE_CAPABILITY_ID, OFFICIAL_LIVEWARE_PLUGIN_ID } from "../src/plugin/official/liveware-manifest";
 import {
@@ -1098,6 +1099,7 @@ describe("official Liveware Binding publication lifecycle", () => {
     expect(leaseReleases).toBe(4);
     expect(activeSharedLeases).toBe(0);
     expect(sharedInstanceStops).toBe(2);
+
     expect(leaseActions).toEqual([
       "acquire:official-a",
       "acquire:official-b",
@@ -1108,6 +1110,23 @@ describe("official Liveware Binding publication lifecycle", () => {
       "release:official-a",
       "release:official-b",
     ]);
+    state.records.delete("official-a");
+    state.records.delete("official-b");
+    const upgradeDispose = (await provider?.activate(activation)) as OfficialLivewareManagedDisposer;
+    const appsBeforeUpgrade = remote.apps.map((app) => app.appId);
+    const registrationsBeforeUpgrade = structuredClone(remote.registrations);
+    upgradeDispose.preserveOnShutdown(true);
+    await upgradeDispose();
+    expect(remote.apps.map((app) => app.appId)).toEqual(appsBeforeUpgrade);
+    expect(remote.registrations).toEqual(registrationsBeforeUpgrade);
+    expect((await state.read("official-a"))?.value.status).toBe("active");
+    expect((await state.read("official-b"))?.value.desired).toBe("private");
+    expect(activeSharedLeases).toBe(0);
+    const restartedDispose = await provider?.activate(activation);
+    expect(remote.apps.map((app) => app.appId)).toEqual(appsBeforeUpgrade);
+    expect(remote.registrations).toHaveLength(2);
+    await restartedDispose?.();
+    expect(remote.apps).toHaveLength(0);
     const retire = await provider?.activate({
       ...activation,
       activationGeneration: 13,
@@ -1136,7 +1155,7 @@ describe("official Liveware Binding publication lifecycle", () => {
       },
     });
     await retire?.();
-    expect(leaseReleases).toBe(4);
+    expect(leaseReleases).toBe(8);
   });
 
   it("reacquires a crashed shared App and rebinds both existing Publications to the same product", async () => {

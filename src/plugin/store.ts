@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
-import { MAX_PLUGIN_DURABLE_STATE_BYTES } from "../persistence/state";
+import { createStateStore, MAX_PLUGIN_DURABLE_STATE_BYTES } from "../persistence/state";
 import type { AgentBindingConfig } from "../types";
 import type {
   ConnectPluginBundleV1,
@@ -233,10 +234,71 @@ export async function installPluginBundle(options: StagePluginBundleOptions): Pr
   }
 }
 
+// Only call after resolving and verifying a release-pinned official candidate.
+export async function refreshOfficialPluginBundle(
+  options: StagePluginBundleOptions & { stateDbPath?: string },
+): Promise<InstalledPluginLockEntry> {
+  const existing = (await listInstalledPlugins(options.configPath)).find(
+    (entry) => entry.pluginId === options.bundle.manifest.pluginId,
+  );
+  const staged = await stagePluginBundle({
+    ...options,
+    installationConfiguration: existing?.installationConfiguration ?? options.installationConfiguration,
+    capabilityConfigurations: existing?.capabilityConfigurations ?? options.capabilityConfigurations,
+  });
+  try {
+    if (existing && existing.activeArtifact === staged.entry.activeArtifact) {
+      await revalidateInstalledPlugin(existing);
+      await discardStagedPlugin(options.configPath, staged);
+      return existing;
+    }
+    if (existing) {
+      const declarations = (manifest: ConnectPluginManifestV1) =>
+        manifest.capabilities
+          .filter((capability) => "durableState" in capability && capability.durableState)
+          .map((capability) => ({
+            id: capability.id,
+            declaration: "durableState" in capability ? capability.durableState : undefined,
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id));
+      const previous = declarations(existing.manifest);
+      const next = declarations(staged.entry.manifest);
+      if (!isDeepStrictEqual(previous, next))
+        throw new Error("Offline official refresh requires unchanged Durable State declarations");
+      if (previous.length) {
+        if (!options.stateDbPath) throw new Error("Offline official refresh requires the configured state database");
+        const state = createStateStore({ dbPath: options.stateDbPath });
+        try {
+          const snapshots = await state.listPluginDurableState(existing.pluginId, existing.activationGeneration);
+          await state.commitPluginDurableStateMigrations(
+            snapshots.map((snapshot) => ({
+              ...snapshot.record,
+              namespace: { ...snapshot.namespace, activationGeneration: staged.entry.activationGeneration },
+            })),
+          );
+        } finally {
+          await state.close();
+        }
+      }
+    }
+    return await commitStagedPlugin(options.configPath, staged, existing ? "official-refresh" : "install");
+  } catch (error) {
+    await discardStagedPlugin(options.configPath, staged).catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function commitStagedPlugin(
   configPath: string,
   staged: StagedPlugin,
-  operation: "install" | "update" | "upload-replace" | "source-replace" | "official-replace" | "select",
+  operation:
+    | "install"
+    | "update"
+    | "upload-replace"
+    | "source-replace"
+    | "official-replace"
+    | "official-refresh"
+    | "select",
 ): Promise<InstalledPluginLockEntry> {
   const paths = pluginInstallationPaths(configPath);
   let committed!: InstalledPluginLockEntry;
@@ -276,7 +338,7 @@ export async function commitStagedPlugin(
     committed = {
       ...staged.entry,
       activationGeneration,
-      status: "active",
+      status: operation === "official-refresh" && existing?.status === "disabled" ? "disabled" : "active",
       error: null,
       retainedVersions: retained,
     };

@@ -62,7 +62,8 @@ export function createDeepSeekHarnessOfficialPluginEntry(
             bridgePath:
               options.runtimeAdapter?.bridgePath ??
               fileURLToPath(new URL("./deepseek-harness-bridge.mjs", import.meta.url)),
-            bridgeBuild: options.runtimeAdapter?.bridgeBuild ?? CONNECT_VERSION,
+            // Change the entry identity too, so older adapters restore the complete old asset graph on rollback.
+            bridgeBuild: options.runtimeAdapter?.bridgeBuild ?? `${CONNECT_VERSION}:clawchat-tools-v1`,
             ...(options.runtimeAdapter?.createBridge ? { createBridge: options.runtimeAdapter.createBridge } : {}),
             ...(options.runtimeAdapter?.probeExecutable
               ? { probeExecutable: options.runtimeAdapter.probeExecutable }

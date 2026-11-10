@@ -2107,3 +2107,49 @@ describe("ConnectRuntime Agent Binding sessions", () => {
     await fixture.store.close();
   });
 });
+
+describe("ClawChat typing lifecycle", () => {
+  it.each([false, true])("signals typing while a turn is pending and clears on failure=%s", async (fails) => {
+    const fixture = await runtimeFixture();
+    const typing = mock((_chat: string, _active: boolean, _options: unknown) => {});
+    fixture.wsClient.sendTyping = typing;
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const adapter: ConnectRuntimeAdapter = {
+      kind: "codex",
+      modes: [],
+      start: async () => ({
+        async *prompt() {
+          entered();
+          await pending;
+          if (fails) throw new Error("fixture failure");
+          yield activity("done");
+        },
+        close: async () => {},
+      }),
+    };
+    const runtime = new ConnectRuntime({
+      agentId: "codex",
+      ...fixture,
+      stateStore: fixture.store,
+      runtimeAdapters: new RuntimeAdapterRegistry([fixedRuntimeAdapter(adapter)]),
+    });
+    const turn = runtime.handleInboundMessage(message());
+    try {
+      await started;
+      expect(typing.mock.calls).toEqual([["chat-1", true, { toType: "direct" }]]);
+    } finally {
+      release();
+      await turn;
+      await runtime.dispose();
+      await fixture.store.close();
+    }
+    expect(typing.mock.calls.at(-1)).toEqual(["chat-1", false, { toType: "direct" }]);
+  });
+});

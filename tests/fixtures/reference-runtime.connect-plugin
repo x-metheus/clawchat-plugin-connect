@@ -67,22 +67,22 @@
       {
         "target": "darwin-x64",
         "entry": "runtime.mjs",
-        "integrity": "sha256-6bH7d89ZDQS2UXLCya2+fFTUcByGo+2RrUrCJ0fpRDg="
+        "integrity": "sha256-23OJELaDooxa7oNuQ+XLgjL7q9mhy8f0nojC1CyKPp4="
       },
       {
         "target": "linux-arm64",
         "entry": "runtime.mjs",
-        "integrity": "sha256-6bH7d89ZDQS2UXLCya2+fFTUcByGo+2RrUrCJ0fpRDg="
+        "integrity": "sha256-23OJELaDooxa7oNuQ+XLgjL7q9mhy8f0nojC1CyKPp4="
       },
       {
         "target": "linux-x64",
         "entry": "runtime.mjs",
-        "integrity": "sha256-6bH7d89ZDQS2UXLCya2+fFTUcByGo+2RrUrCJ0fpRDg="
+        "integrity": "sha256-23OJELaDooxa7oNuQ+XLgjL7q9mhy8f0nojC1CyKPp4="
       },
       {
         "target": "win32-x64",
         "entry": "runtime.mjs",
-        "integrity": "sha256-6bH7d89ZDQS2UXLCya2+fFTUcByGo+2RrUrCJ0fpRDg="
+        "integrity": "sha256-23OJELaDooxa7oNuQ+XLgjL7q9mhy8f0nojC1CyKPp4="
       }
     ]
   },

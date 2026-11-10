@@ -136,23 +136,31 @@ const BUNDLED_OFFICIAL_PLUGINS: readonly BundledOfficialPluginDefinition[] = [
   {
     descriptor: deepSeekHarnessDescriptor,
     name: "DeepSeek Harness",
-    artifactIntegrity: "sha256-JCBMNVc3uFOaWUOShpWYp5MfR6+hakCRfXrAMXQVYQk=",
+    artifactIntegrity: "sha256-PnPNzfflNQ7Jw7dLcg6ozZUvEvogYQ/MJ8zdN+X3srs=",
     assetIntegrities: {
       "artifacts/deepseek-harness-bridge.mjs": {
-        "darwin-arm64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
-        "darwin-x64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
-        "linux-arm64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
-        "linux-x64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
-        "win32-arm64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
-        "win32-x64": "sha256-GG91YCOdZ7DtI8Qqwwr3/55v4GefBAvEvPxI2IjdKuo=",
+        "darwin-arm64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
+        "darwin-x64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
+        "linux-arm64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
+        "linux-x64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
+        "win32-arm64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
+        "win32-x64": "sha256-WVMoH4vsy4xZrnl71O/zoyMWK0cq4JS3pDRi5Y1W+mE=",
       },
       "artifacts/deepseek-harness-question-provider.mjs": {
-        "darwin-arm64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
-        "darwin-x64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
-        "linux-arm64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
-        "linux-x64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
-        "win32-arm64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
-        "win32-x64": "sha256-3TYv1Tu1/9wrXnjR+bNDYQxJMYEbAb6Nzk9QEf2ClzQ=",
+        "darwin-arm64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+        "darwin-x64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+        "linux-arm64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+        "linux-x64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+        "win32-arm64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+        "win32-x64": "sha256-ImK5ZUR++PLAlt8R0UZFvwafYnUpKk+u5toQ5pDBQZA=",
+      },
+      "artifacts/deepseek-harness-tool-policy.mjs": {
+        "darwin-arm64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
+        "darwin-x64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
+        "linux-arm64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
+        "linux-x64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
+        "win32-arm64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
+        "win32-x64": "sha256-RScaYs2inRkqjaPBMLiiIG9OjY95uSSbe+yO4nMnJ6A=",
       },
     },
     classification: "runtime",
@@ -188,7 +196,7 @@ const BUNDLED_OFFICIAL_PLUGINS: readonly BundledOfficialPluginDefinition[] = [
   {
     descriptor: livewareDescriptor,
     name: "Liveware",
-    artifactIntegrity: "sha256-GLAK96GhhlgSioQk8IjSP1EoSw0rzDi02TQ6I0g5aVA=",
+    artifactIntegrity: "sha256-Wmjh5NedB8OFYAfd+2GcUzqrlEqWU16yxU6+RG9Y8Mw=",
     classification: "exposure",
     assetIntegrities: {
       "assets/liveware": {

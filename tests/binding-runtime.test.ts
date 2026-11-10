@@ -2906,3 +2906,122 @@ describe("Binding Runtime Protocol v2 assembly", () => {
     await stateStore.close();
   });
 });
+
+describe("direct ClawChat interaction presentation", () => {
+  it("delivers a runtime question without quoting the source private message", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "clawchat-binding-question-"));
+    const stateStore = createStateStore({ dbPath: join(directory, "state.sqlite") });
+    const config = defaultConfig();
+    config.agents = { codex: pluginBinding() };
+    const controller = new AbortController();
+    const runtimeAdapters = new RuntimeAdapterRegistry([
+      fixedRuntimeAdapter({
+        kind: "codex",
+        modes: [],
+        start: async () => ({
+          async *prompt(input) {
+            if (!input.interactionPort || !input.metadata?.sessionRef || !input.turnId)
+              throw new Error("missing turn context");
+            await input.interactionPort.request(
+              {
+                kind: "user-input",
+                title: "Question",
+                description: "Choose",
+                autoResolutionMs: null,
+                questions: [
+                  { id: "q", header: "Q", prompt: "Choose a color", secret: false, allowOther: true, options: null },
+                ],
+              },
+              {
+                sessionRef: input.metadata.sessionRef,
+                turnId: input.turnId,
+                origin: "clawchat",
+                deliveryConfirmation: Promise.resolve(),
+                signal: controller.signal,
+              },
+            );
+            yield {
+              id: "question-done",
+              position: "1",
+              parentId: null,
+              kind: "assistant",
+              text: "done",
+              state: "complete",
+              source: "live",
+              data: { outputKind: "final" },
+            };
+          },
+          cancel: async () => {
+            controller.abort();
+            return true;
+          },
+          close: async () => {
+            controller.abort();
+          },
+        }),
+      }),
+    ]);
+    const transport = new MemoryTransport();
+    const starting = startBindingRuntime({
+      agentId: "codex",
+      activation: {
+        localAgentId: "codex",
+        accessToken: "token",
+        refreshToken: null,
+        serverAgentId: "agt_server",
+        userId: "usr_alice",
+        ownerUserId: "usr_owner",
+        conversationId: "chat-owner",
+      },
+      config,
+      configPath: join(directory, "config.json"),
+      deviceId: "device-local",
+      stateStore,
+      workspaces: new WorkspaceCatalog(stateStore),
+      runtimeAdapters,
+      wsTransport: transport,
+      clawChatApi: {
+        getUserProfile: async () => ({ nickname: "Owner" }),
+        getMyGroupSettings: async () => ({ authoritative: true, rows: [] }),
+      } as never,
+      verifyInstalledSkills: async () => undefined,
+      writeError: () => undefined,
+    });
+    const handle = await completeBindingHandshake(transport, starting, "01JXYZ8K3MNPQRSTVWXYZ0AQ");
+    try {
+      transport.receive({
+        version: "2",
+        event: EVENT.MESSAGE_SEND,
+        trace_id: "question-input",
+        dseq: 1,
+        emitted_at: Date.now(),
+        chat_id: "chat-owner",
+        chat_type: "direct",
+        sender: { id: "usr_owner", type: "direct", nick_name: "Owner" },
+        payload: {
+          message_id: "source-private",
+          message_mode: "normal",
+          message: {
+            body: { fragments: [{ kind: "text", text: "ask me" }] },
+            context: { mentions: [], reply: null },
+            streaming: { status: "static", sequence: 0, mutation_policy: "sealed" },
+          },
+        },
+      });
+      let question: Envelope | undefined;
+      for (let attempt = 0; attempt < 100 && !question; attempt++) {
+        await Bun.sleep(5);
+        question = transport.sent.find(
+          (e) => e.event === EVENT.MESSAGE_REPLY && JSON.stringify(e.payload).includes("Choose a color"),
+        );
+      }
+      expect(question).toBeDefined();
+      expect(question?.payload).toMatchObject({ message: { context: { reply: null } } });
+    } finally {
+      controller.abort();
+      await handle.close();
+      await runtimeAdapters.close();
+      await stateStore.close();
+    }
+  });
+});

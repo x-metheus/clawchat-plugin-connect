@@ -263,3 +263,34 @@ describe("Core control local Connect Client acquisition", () => {
     await control.stop();
   });
 });
+
+it("quiesces an upgrade without retiring Publications or Runtime Bindings", async () => {
+  const retired = mock(async () => undefined);
+  const quiesced = mock(async (_ids: readonly string[]) => undefined);
+  const host = {
+    retireBindings: retired,
+    registerManagedWebAppLeaseRetirer: () => () => undefined,
+  } as unknown as ConnectPluginHost;
+  let server: CoreControlServerFactoryOptions | undefined;
+  const control = await startCoreControl(
+    configPath,
+    host,
+    (options) => {
+      server = options;
+      return { stop() {} };
+    },
+    retired,
+    quiesced,
+  );
+  if (!server) throw new Error("missing control server");
+  const request = new Request("http://127.0.0.1:47822/core/v1/bindings/quiesce", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", [CORE_CONTROL_CONFIG_HEADER]: configPath },
+    body: JSON.stringify({ bindingIds: ["dsh"] }),
+  });
+  const response = await server.fetch(request, { requestIP: () => ({ address: "127.0.0.1" }) });
+  expect(response.status).toBe(200);
+  expect(quiesced).toHaveBeenCalledWith(["dsh"]);
+  expect(retired).not.toHaveBeenCalled();
+  await control.stop();
+});

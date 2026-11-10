@@ -31,6 +31,7 @@ export interface OfficialLivewareManagedWebAppLease {
   release(): Promise<void>;
 }
 export interface OfficialLivewareManagedDisposer extends ConnectPluginDisposer {
+  preserveOnShutdown(preserve: boolean): void;
   retire(): Promise<void>;
   retireBindings(bindingIds: readonly string[]): Promise<void>;
   retireManagedWebApp(reference: ManagedWebAppGenerationReference): Promise<void>;
@@ -110,6 +111,7 @@ export function createOfficialLivewarePluginEntry(): ConnectPluginEntry {
           let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
           let reconciliation = Promise.resolve();
           let stopping = false;
+          let preserveOnShutdown = false;
 
           const ensureResource = async (
             target: BindingLivewarePublicationTarget,
@@ -293,9 +295,15 @@ export function createOfficialLivewarePluginEntry(): ConnectPluginEntry {
           }
           const dispose = Object.assign(
             async () => {
-              await retireAll();
+              if (preserveOnShutdown) {
+                await stopReconciliation();
+                for (const bindingId of [...resources.keys()]) await releaseResource(bindingId);
+              } else await retireAll();
             },
             {
+              preserveOnShutdown: (preserve: boolean) => {
+                preserveOnShutdown = preserve;
+              },
               retire: retireAll,
               retireBindings: async (bindingIds: readonly string[]) => {
                 await reconciliation;

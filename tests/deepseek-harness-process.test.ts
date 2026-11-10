@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { chmod, mkdtemp } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,6 +33,9 @@ output.write(JSON.stringify({
     crossProcessSessionOwnership: false,
   },
 }) + "\\n");
+// SDK profiles drain on stdin EOF even though Bridge RPC uses inherited pipes.
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(17));
 const lines = createInterface({ input, crlfDelay: Infinity });
 lines.on("line", (line) => {
   const request = JSON.parse(line);
@@ -66,9 +69,43 @@ describe("DeepSeek Harness Bridge process boundary", () => {
       profile: null,
       protocol: { build: "test-build" },
     });
+    await Bun.sleep(50);
     await expect(client.request("echo", { value: 42 })).resolves.toEqual({ value: 42 });
     await client.close();
     await expect(client.request("echo", {})).rejects.toThrow("closed");
+  });
+
+  it("reaps an unready child that ignores SIGTERM", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "connect-dsh-stuck-"));
+    const executable = join(directory, "dsh");
+    const pidFile = join(directory, "pid");
+    await Bun.write(
+      executable,
+      `#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+`,
+    );
+    await chmod(executable, 0o700);
+    try {
+      await expect(
+        startDshBridge({
+          executable,
+          home: directory,
+          cwd: directory,
+          bridgePath: join(directory, "bridge.mjs"),
+          bridgeBuild: "test-build",
+          startTimeoutMs: 300,
+          stopTimeoutMs: 100,
+        }),
+      ).rejects.toThrow("workspace-registry-missing");
+      const pid = Number(await readFile(pidFile, "utf8"));
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects malformed, oversized, and unsupported frames before dispatch", () => {

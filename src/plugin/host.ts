@@ -109,6 +109,7 @@ interface ActivePlugin {
   retireManagedWebApp(reference: ManagedWebAppGenerationReference): Promise<void>;
   reconcileManagedWebApps(): Promise<void>;
   dispose(): Promise<void>;
+  preserveOnShutdown(preserve: boolean): void;
   retireManagedResources(): Promise<void>;
   activateExposures(): Promise<void>;
   retireBindings(bindingIds: readonly string[]): Promise<void>;
@@ -231,6 +232,7 @@ export class ConnectPluginHost implements ConnectPluginManagement {
   private readonly officialCandidates = new Map<string, ResolvedOfficialPlugin>();
   private bindingRuntimes: readonly BindingRuntimeHandle[] = [];
   private optionalSurfacesReady = false;
+  private preservePublicationsOnShutdown = false;
   private readonly managedWebAppLeaseRetirers = new Set<
     (reference: ManagedWebAppGenerationReference) => Promise<void>
   >();
@@ -950,13 +952,19 @@ export class ConnectPluginHost implements ConnectPluginManagement {
     }
   }
 
+  preserveOnShutdown(preserve: boolean): void {
+    this.preservePublicationsOnShutdown = preserve;
+    for (const plugin of this.active.values()) plugin.preserveOnShutdown(preserve);
+  }
+
   async close(): Promise<void> {
     this.officialCandidates.clear();
     await this.operationCoordinator.idle();
     this.optionalSurfacesReady = false;
     const active = [...this.active.values()].reverse();
     const results: PromiseSettledResult<void>[] = [];
-    results.push(...(await Promise.allSettled([this.retireManagedResources()])));
+    if (!this.preservePublicationsOnShutdown)
+      results.push(...(await Promise.allSettled([this.retireManagedResources()])));
     this.active.clear();
     for (const plugin of active) {
       results.push(...(await Promise.allSettled([plugin.dispose()])));
@@ -1831,6 +1839,9 @@ export class ConnectPluginHost implements ConnectPluginManagement {
         const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
         if (failure) throw failure.reason;
       },
+      preserveOnShutdown: (preserve) => {
+        for (const disposer of managedDisposers) disposer.preserveOnShutdown(preserve);
+      },
       retireManagedResources: async () => {
         if (managedResourcesRetired) return;
         for (const definition of stagedManagedWebApps) {
@@ -2146,6 +2157,7 @@ function isManagedOfficialDisposer(disposer: ConnectPluginDisposer): disposer is
   const candidate = disposer as Partial<OfficialLivewareManagedDisposer>;
   return (
     typeof candidate.retire === "function" &&
+    typeof candidate.preserveOnShutdown === "function" &&
     typeof candidate.retireBindings === "function" &&
     typeof candidate.retireManagedWebApp === "function" &&
     typeof candidate.reconcileManagedWebApps === "function"
